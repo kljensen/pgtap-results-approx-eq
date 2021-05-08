@@ -85,6 +85,26 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION pg_temp.log_columns (r record)
+    RETURNS void
+    AS $$
+DECLARE
+    key text;
+    val text;
+BEGIN
+    FOR key,
+    val IN
+    SELECT
+        *
+    FROM
+        json_each_text(row_to_json(r))
+        LOOP
+            RAISE NOTICE '% % %', key, val, r.foo;
+        END LOOP;
+    RETURN;
+END;
+$$
+LANGUAGE plpgsql;
 
 
 SELECT pg_temp.results_close(
@@ -92,6 +112,14 @@ SELECT pg_temp.results_close(
     $$VALUES ( 42, 0.12), (19, 10.3), (59, 1023.232)$$,
     'values should match approximately'
 );
+
+SELECT
+    pg_temp.log_columns(vals)
+FROM (
+    VALUES (42, 0.12),
+        (19, 10.3),
+        (59, 1023.232)) AS vals (foo, bar);
+
 
 SELECT
     *
