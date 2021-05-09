@@ -7,7 +7,7 @@ SELECT pgtap.plan(5);
 
 
 -- results_eq( cursor, cursor, description )
-CREATE OR REPLACE FUNCTION pg_temp.results_close( refcursor, refcursor, json, text )
+CREATE OR REPLACE FUNCTION pg_temp.results_approx_equal( refcursor, refcursor, json, text )
 RETURNS TEXT AS $$
 DECLARE
     have       ALIAS FOR $1;
@@ -23,9 +23,8 @@ BEGIN
     FETCH want INTO want_rec;
     want_found := FOUND;
     WHILE have_found OR want_found LOOP
-        IF have_found <> want_found OR ((have_rec IS DISTINCT FROM want_rec) AND NOT (pg_temp.records_approx_equal(have_rec, want_rec, $3)))
+        IF have_found <> want_found OR NOT pg_temp.records_approx_equal(have_rec, want_rec, $3)
         THEN
-            RAISE WARNING 'WOOT1!';
             RETURN ok( false, $4 ) || E'\n' || diag(
                 '    Results differ beginning at row ' || rownum || E':\n' ||
                 '        have: ' || CASE WHEN have_found THEN have_rec::text ELSE 'NULL' END || E'\n' ||
@@ -53,7 +52,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- results_eq( sql, sql, description )
-CREATE OR REPLACE FUNCTION pg_temp.results_close( TEXT, TEXT, json, TEXT )
+CREATE OR REPLACE FUNCTION pg_temp.results_approx_equal( TEXT, TEXT, json, TEXT )
 RETURNS TEXT AS $$
 DECLARE
     have REFCURSOR;
@@ -62,7 +61,7 @@ DECLARE
 BEGIN
     OPEN have FOR EXECUTE _query($1);
     OPEN want FOR EXECUTE _query($2);
-    res :=pg_temp.results_close(have, want, $3, $4);
+    res :=pg_temp.results_approx_equal(have, want, $3, $4);
     CLOSE have;
     CLOSE want;
     RETURN res;
@@ -87,7 +86,6 @@ CREATE FUNCTION pg_temp.values_approx_equal(TEXT, TEXT, TEXT)
 $$
 LANGUAGE SQL
 IMMUTABLE;
-
 
 CREATE OR REPLACE FUNCTION pg_temp.records_approx_equal (r1 record, r2 record, tolerances json)
     RETURNS BOOLEAN
@@ -203,9 +201,72 @@ SELECT results_eq(
     'records_approx_equal should return false when records have different column types'
 );
 
-/* SELECT pg_temp.records_approx_equal((44, 0.4), (42, 0.2), '{"f1":1,"f2":0.1}'::json); */
-/* SELECT pg_temp.records_approx_equal((44, 0.4), (42, 'x'), '{"f1":1,"f2":0.1}'::json); */
-/* SELECT pg_temp.records_approx_equal((44, 0.4), (42, 0.2, 4), '{"f1":1,"f2":0.1}'::json); */
+SELECT * FROM check_test(
+    pg_temp.results_approx_equal(
+        $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
+        $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
+        '{}'::json,
+        ''
+    ),
+    true,
+    'records_approx_equal, when results are equal'
+);
+
+SELECT * FROM check_test(
+    pg_temp.results_approx_equal(
+        $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
+        $$select * from (values (1,1), (2, 3)) vals(a, b)$$,
+        '{}'::json,
+        ''
+    ),
+    false,
+    'records_approx_equal, when results are not equal'
+);
+
+
+SELECT * FROM check_test(
+    pg_temp.results_approx_equal(
+        $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
+        $$select * from (values (2,1), (1, 2)) vals(a, b)$$,
+        '{"a": 1}'::json,
+        ''
+    ),
+    true,
+    'records_approx_equal, when results are within tolerance'
+);
+
+SELECT * FROM check_test(
+    pg_temp.results_approx_equal(
+        $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
+        $$select * from (values (3,1), (1, 2)) vals(a, b)$$,
+        '{"a": 1}'::json,
+        ''
+    ),
+    false,
+    'records_approx_equal, when results are not within tolerance'
+);
+
+SELECT * FROM check_test(
+    pg_temp.results_approx_equal(
+        $$select * from (values (1,1), (2, 6)) vals(a, b)$$,
+        $$select * from (values (2,51), (1, 54)) vals(a, b)$$,
+        json_build_object('a', 1, 'b', 5),
+        ''
+    ),
+    true,
+    'records_approx_equal, when results are within tolerance (two cols)'
+);
+
+SELECT * FROM check_test(
+    pg_temp.results_approx_equal(
+        $$select * from (values (1,1), (2, 6)) vals(a, b)$$,
+        $$select * from (values (2,51), (1, 71)) vals(a, b)$$,
+        json_build_object('a', 1),
+        ''
+    ),
+    false,
+    'records_approx_equal, when results are not within tolerance (two cols)'
+);
 
 SELECT
     *
