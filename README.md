@@ -21,6 +21,14 @@ In that code block I'm saying "consider two rows to be equivalent
 if their `a` columns differ by no more than `1` and their `b` 
 columns differ by no more than `5`.
 
+You can run the tests in the `approx-equal.sql` file like
+
+```
+psql service=your-pg-service-or-whatever -f ./approx-equal.sql
+```
+
+That assumes you've installed pgTAP.
+
 ## License
 
 [pgTap code](https://github.com/theory/pgtap) is Copyright (c) 2008-2020 David E. Wheeler.
