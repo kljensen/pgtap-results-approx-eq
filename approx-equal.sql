@@ -3,28 +3,11 @@ BEGIN;
 
 SET search_path = pg_temp, pgtap;
 
-SELECT pgtap.plan(1);
+SELECT pgtap.plan(5);
 
-CREATE FUNCTION pg_temp.insert_thing (new_thing RECORD) RETURNS INTEGER AS $fun$
-DECLARE
-    inserted_id  INT;
-BEGIN
-    INSERT INTO things (name) VALUES (
-        new_thing.name
-        -- (plus 30 more columns)
-    ) RETURNING id INTO inserted_id;
-    RETURN inserted_id;
-END;
-$fun$ LANGUAGE plpgsql;
-
-CREATE FUNCTION pg_temp.identity (new_thing RECORD) RETURNS RECORD AS $fun$
-BEGIN
-    RETURN new_thing;
-END;
-$fun$ LANGUAGE plpgsql;
 
 -- results_eq( cursor, cursor, description )
-CREATE OR REPLACE FUNCTION pg_temp.results_close( refcursor, refcursor, text )
+CREATE OR REPLACE FUNCTION pg_temp.results_close( refcursor, refcursor, json, text )
 RETURNS TEXT AS $$
 DECLARE
     have       ALIAS FOR $1;
@@ -40,11 +23,10 @@ BEGIN
     FETCH want INTO want_rec;
     want_found := FOUND;
     WHILE have_found OR want_found LOOP
-        IF have_found <> want_found OR ((have_rec IS DISTINCT FROM want_rec) AND (pg_temp.compare_columns(have_rec, want_rec)))
+        IF have_found <> want_found OR ((have_rec IS DISTINCT FROM want_rec) AND NOT (pg_temp.records_approx_equal(have_rec, want_rec, $3)))
         THEN
-
             RAISE WARNING 'WOOT1!';
-            RETURN ok( false, $3 ) || E'\n' || diag(
+            RETURN ok( false, $4 ) || E'\n' || diag(
                 '    Results differ beginning at row ' || rownum || E':\n' ||
                 '        have: ' || CASE WHEN have_found THEN have_rec::text ELSE 'NULL' END || E'\n' ||
                 '        want: ' || CASE WHEN want_found THEN want_rec::text ELSE 'NULL' END
@@ -57,10 +39,10 @@ BEGIN
         want_found := FOUND;
     END LOOP;
 
-    RETURN ok( true, $3 );
+    RETURN ok( true, $4 );
 EXCEPTION
     WHEN datatype_mismatch THEN
-        RETURN ok( false, $3 ) || E'\n' || diag(
+        RETURN ok( false, $4 ) || E'\n' || diag(
             E'    Number of columns or their types differ between the queries' ||
             CASE WHEN have_rec::TEXT = want_rec::text THEN '' ELSE E':\n' ||
                 '        have: ' || CASE WHEN have_found THEN have_rec::text ELSE 'NULL' END || E'\n' ||
@@ -71,7 +53,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- results_eq( sql, sql, description )
-CREATE OR REPLACE FUNCTION pg_temp.results_close( TEXT, TEXT, TEXT )
+CREATE OR REPLACE FUNCTION pg_temp.results_close( TEXT, TEXT, json, TEXT )
 RETURNS TEXT AS $$
 DECLARE
     have REFCURSOR;
@@ -80,55 +62,61 @@ DECLARE
 BEGIN
     OPEN have FOR EXECUTE _query($1);
     OPEN want FOR EXECUTE _query($2);
-    res := results_eq(have, want, $3);
+    res :=pg_temp.results_close(have, want, $3, $4);
     CLOSE have;
     CLOSE want;
     RETURN res;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION pg_temp.log_columns (r record)
+
+CREATE FUNCTION pg_temp.values_approx_equal(numeric, numeric, numeric)
     RETURNS boolean
     AS $$
-DECLARE
-    key text;
-    val text;
-BEGIN
-    FOR key,
-    val IN
     SELECT
-        *
-    FROM
-        json_each_text(row_to_json(r))
-        LOOP
-            RAISE NOTICE '% % %', key, val, r.foo;
-        END LOOP;
-    RETURN true;
-END;
+        ABS($1 - $2) <= $3;
 $$
-LANGUAGE plpgsql;
+LANGUAGE SQL
+IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION pg_temp.compare_columns (r1 record, r2 record, diffs json)
+CREATE FUNCTION pg_temp.values_approx_equal(TEXT, TEXT, TEXT)
+    RETURNS boolean
+    AS $$
+    SELECT
+        pg_temp.values_approx_equal($1::numeric, $2::numeric, $3::numeric);
+$$
+LANGUAGE SQL
+IMMUTABLE;
+
+
+CREATE OR REPLACE FUNCTION pg_temp.records_approx_equal (r1 record, r2 record, tolerances json)
     RETURNS BOOLEAN
     AS $$
 DECLARE
     key text;
     val1 text;
     val2 text;
-    max_diff text;
+    tolerance text;
 BEGIN
-    FOR key, val1, val2, max_diff IN
+    RAISE NOTICE '%', (SELECT pg_typeof(x.*) from (values(r1)) as x);
+    IF r1 = r2
+    THEN
+        RAISE NOTICE 'NOT DISTINCT r1=% r2=%', r1, r2;
+        return TRUE;
+    END IF;
+    RAISE NOTICE 'DISTINCT r1=% r2=%', r1, r2;
+    FOR key, val1, val2, tolerance IN
     SELECT
         j1.key,
         j1.value,
         j2.value,
-        diffs.value
+        tolerances.value
     FROM
         json_each(row_to_json(r1)) j1
         join json_each(row_to_json(r2)) j2 on j1.key = j2.key
-        left join json_each(diffs) diffs on j1.key = diffs.key
+        left join json_each(tolerances) tolerances on j1.key = tolerances.key
         LOOP
-            IF max_diff IS NULL
+            IF tolerance IS NULL
             THEN
                 IF val1 IS DISTINCT FROM val2
                 THEN
@@ -136,36 +124,88 @@ BEGIN
                 ELSE
                 END IF;
             ELSE
-                IF abs(val1::numeric - val2::numeric) > max_diff::numeric
+                IF NOT pg_temp.values_approx_equal(val1, val2, tolerance)
                 THEN
-                    RAISE NOTICE '% and % more than % apart', val1, val2, max_diff;
+                    RAISE NOTICE '% and % more than % apart', val1, val2, tolerance;
                     RETURN FALSE;
                 ELSE
                 END IF;
             END IF;
         END LOOP;
     RETURN TRUE;
+EXCEPTION
+    WHEN datatype_mismatch THEN
+        -- This will be raised when we compare two records that have
+        -- different columns.
+        RETURN FALSE;
 END;
 $$
 LANGUAGE plpgsql;
 
 
-
-SELECT pg_temp.results_close(
-    $$VALUES ( 42, 0.12), (19, 10.3), (59, 1023.232)$$,
-    $$VALUES ( 42, 0.12), (19, 10.3), (59, 1023.23)$$,
-    'values should match approximately'
+SELECT results_eq(
+    $$SELECT pg_temp.values_approx_equal(5, 5, 0)$$,
+    ARRAY[TRUE],
+    'values_approx_equal should return true when values are exactly equal (zero tolerance)'
 );
 
-SELECT
-    pg_temp.log_columns(vals)
-FROM (
-    VALUES (42, 0.12),
-        (19, 10.3),
-        (59, 1023.232)) AS vals (foo, bar);
+SELECT results_eq(
+    $$SELECT pg_temp.values_approx_equal(5, 5, 1)$$,
+    ARRAY[TRUE],
+    'values_approx_equal should return true when values are exactly equal (non-zero tolerance)'
+);
 
-SELECT pg_temp.compare_columns((43, 0.1), (42, 0.2), '{"f1":1,"f2":0.1}'::json);
-SELECT pg_temp.compare_columns((44, 0.4), (42, 0.2), '{"f1":1,"f2":0.1}'::json);
+SELECT results_eq(
+    $$SELECT pg_temp.values_approx_equal(6, 5, 1)$$,
+    ARRAY[TRUE],
+    'values_approx_equal should return true when values are within tolerance (lhs > rhs)'
+);
+SELECT results_eq(
+    $$SELECT pg_temp.values_approx_equal(6, 7, 1)$$,
+    ARRAY[TRUE],
+    'values_approx_equal should return true when values are within tolerance (lhs < rhs)'
+);
+
+SELECT results_eq(
+    $$SELECT pg_temp.values_approx_equal(9, 7, 1)$$,
+    ARRAY[FALSE],
+    'values_approx_equal should return false when values are outside of tolerance (lhs > rhs)'
+);
+SELECT results_eq(
+    $$SELECT pg_temp.values_approx_equal(9, 11, 1)$$,
+    ARRAY[FALSE],
+    'values_approx_equal should return false when values are outside of tolerance (lhs < rhs)'
+);
+
+SELECT results_eq(
+    $$SELECT pg_temp.records_approx_equal((43, 0.1), (43, 0.1), '{}'::json)$$,
+    ARRAY[TRUE],
+    'records_approx_equal should return true when records are exactly equal'
+);
+SELECT results_eq(
+    $$SELECT pg_temp.records_approx_equal((43, 0.1, 0.001), (43, 0.1, 0.002), '{"f3": 0.001}'::json)$$,
+    ARRAY[TRUE],
+    'records_approx_equal should return true when records are within the tolerance'
+);
+SELECT results_eq(
+    $$SELECT pg_temp.records_approx_equal((43, 0.1, 0.001), (43, 0.1, 0.003), '{"f3": 0.001}'::json)$$,
+    ARRAY[FALSE],
+    'records_approx_equal should return false when records are not within the tolerance'
+);
+SELECT results_eq(
+    $$SELECT pg_temp.records_approx_equal((43, 0.1, 0.001, 5), (43, 0.1, 0.001), '{"f3": 0.001}'::json)$$,
+    ARRAY[FALSE],
+    'records_approx_equal should return false when records have different number columns'
+);
+SELECT results_eq(
+    $$SELECT pg_temp.records_approx_equal((43, 'x', 0.001), (43, 0.1, 0.001), '{"f3": 0.001}'::json)$$,
+    ARRAY[FALSE],
+    'records_approx_equal should return false when records have different column types'
+);
+
+/* SELECT pg_temp.records_approx_equal((44, 0.4), (42, 0.2), '{"f1":1,"f2":0.1}'::json); */
+/* SELECT pg_temp.records_approx_equal((44, 0.4), (42, 'x'), '{"f1":1,"f2":0.1}'::json); */
+/* SELECT pg_temp.records_approx_equal((44, 0.4), (42, 0.2, 4), '{"f1":1,"f2":0.1}'::json); */
 
 SELECT
     *
