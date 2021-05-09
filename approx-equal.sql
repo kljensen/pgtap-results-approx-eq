@@ -3,7 +3,7 @@ BEGIN;
 
 SET search_path = pg_temp, pgtap;
 
-SELECT pgtap.plan(5);
+SELECT pgtap.plan(17);
 
 
 -- results_eq( cursor, cursor, description )
@@ -68,6 +68,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION pg_temp.results_approx_equal( TEXT, TEXT, json )
+RETURNS TEXT AS $$
+    SELECT pg_temp.results_approx_equal( $1, $2, $3, ''::TEXT );
+$$ LANGUAGE sql;
 
 CREATE FUNCTION pg_temp.values_approx_equal(numeric, numeric, numeric)
     RETURNS boolean
@@ -96,13 +100,10 @@ DECLARE
     val2 text;
     tolerance text;
 BEGIN
-    RAISE NOTICE '%', (SELECT pg_typeof(x.*) from (values(r1)) as x);
     IF r1 = r2
     THEN
-        RAISE NOTICE 'NOT DISTINCT r1=% r2=%', r1, r2;
         return TRUE;
     END IF;
-    RAISE NOTICE 'DISTINCT r1=% r2=%', r1, r2;
     FOR key, val1, val2, tolerance IN
     SELECT
         j1.key,
@@ -124,7 +125,6 @@ BEGIN
             ELSE
                 IF NOT pg_temp.values_approx_equal(val1, val2, tolerance)
                 THEN
-                    RAISE NOTICE '% and % more than % apart', val1, val2, tolerance;
                     RETURN FALSE;
                 ELSE
                 END IF;
@@ -205,8 +205,7 @@ SELECT * FROM check_test(
     pg_temp.results_approx_equal(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
-        '{}'::json,
-        ''
+        '{}'::json
     ),
     true,
     'records_approx_equal, when results are equal'
@@ -216,8 +215,7 @@ SELECT * FROM check_test(
     pg_temp.results_approx_equal(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (1,1), (2, 3)) vals(a, b)$$,
-        '{}'::json,
-        ''
+        '{}'::json
     ),
     false,
     'records_approx_equal, when results are not equal'
@@ -228,8 +226,7 @@ SELECT * FROM check_test(
     pg_temp.results_approx_equal(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (2,1), (1, 2)) vals(a, b)$$,
-        '{"a": 1}'::json,
-        ''
+        '{"a": 1}'::json
     ),
     true,
     'records_approx_equal, when results are within tolerance'
@@ -239,8 +236,7 @@ SELECT * FROM check_test(
     pg_temp.results_approx_equal(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (3,1), (1, 2)) vals(a, b)$$,
-        '{"a": 1}'::json,
-        ''
+        '{"a": 1}'::json
     ),
     false,
     'records_approx_equal, when results are not within tolerance'
@@ -248,10 +244,9 @@ SELECT * FROM check_test(
 
 SELECT * FROM check_test(
     pg_temp.results_approx_equal(
-        $$select * from (values (1,1), (2, 6)) vals(a, b)$$,
-        $$select * from (values (2,51), (1, 54)) vals(a, b)$$,
-        json_build_object('a', 1, 'b', 5),
-        ''
+        $$select * from (values (1,50), (1, 10)) vals(a, b)$$,
+        $$select * from (values (2,55), (0, 5)) vals(a, b)$$,
+        json_build_object('a', 1, 'b', 5)
     ),
     true,
     'records_approx_equal, when results are within tolerance (two cols)'
@@ -259,10 +254,9 @@ SELECT * FROM check_test(
 
 SELECT * FROM check_test(
     pg_temp.results_approx_equal(
-        $$select * from (values (1,1), (2, 6)) vals(a, b)$$,
-        $$select * from (values (2,51), (1, 71)) vals(a, b)$$,
-        json_build_object('a', 1),
-        ''
+        $$select * from (values (1,50), (1, 10)) vals(a, b)$$,
+        $$select * from (values (2,55), (0, 5)) vals(a, b)$$,
+        json_build_object('a', 1, 'b', 4)
     ),
     false,
     'records_approx_equal, when results are not within tolerance (two cols)'
