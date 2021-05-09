@@ -18,7 +18,7 @@ SELECT pg_temp.results_approx_equal(
 ```
 
 In that code block I'm saying "consider two rows to be equivalent
-if there `a` columns differ by no more than `1` and their `b` 
+if their `a` columns differ by no more than `1` and their `b` 
 columns differ by no more than `5`.
 
 ## License
