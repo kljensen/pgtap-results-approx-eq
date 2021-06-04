@@ -3,7 +3,7 @@ BEGIN;
 
 SET search_path = pg_temp, pgtap;
 
-SELECT pgtap.plan(17);
+SELECT pgtap.plan(19);
 
 
 -- results_eq( cursor, cursor, description )
@@ -95,35 +95,48 @@ CREATE OR REPLACE FUNCTION pg_temp.records_approx_eq (r1 record, r2 record, tole
     RETURNS BOOLEAN
     AS $$
 DECLARE
-    key text;
+    j1key text;
+    j2key text;
     val1 text;
     val2 text;
     tolerance text;
 BEGIN
-    IF r1 = r2
+    -- Notice because I'm casting to TEXT that a record
+    -- like ('0', 0) should equal (0, 0).
+    IF r1::text = r2::text
     THEN
         return TRUE;
     END IF;
-    FOR key, val1, val2, tolerance IN
+    FOR j1key, j2key, val1, val2, tolerance IN
     SELECT
-        j1.key,
+        j1.key j1key,
+        j2.key j2key,
         j1.value,
         j2.value,
         tolerances.value
     FROM
-        json_each(row_to_json(r1)) j1
-        join json_each(row_to_json(r2)) j2 on j1.key = j2.key
+        json_each_text(row_to_json(r1)) j1
+        full outer join json_each(row_to_json(r2)) j2 on j1.key = j2.key
         left join json_each(tolerances) tolerances on j1.key = tolerances.key
         LOOP
+            IF j1key IS DISTINCT FROM j2key
+            THEN
+                RETURN FALSE;
+            END IF;
             IF tolerance IS NULL
             THEN
-                IF val1 IS DISTINCT FROM val2
+                IF val1::text IS DISTINCT FROM val2::text
                 THEN
                     RETURN FALSE;
                 ELSE
                 END IF;
             ELSE
-                IF NOT pg_temp.values_approx_equal(val1, val2, tolerance)
+                -- Did we indicate that we ought to ignore this column?
+                IF tolerance = 'null'
+                THEN
+                    CONTINUE;
+                END IF;
+                IF NOT pg_temp.values_approx_eq(val1, val2, tolerance)
                 THEN
                     RETURN FALSE;
                 ELSE
@@ -131,11 +144,6 @@ BEGIN
             END IF;
         END LOOP;
     RETURN TRUE;
-EXCEPTION
-    WHEN datatype_mismatch THEN
-        -- This will be raised when we compare two records that have
-        -- different columns.
-        RETURN FALSE;
 END;
 $$
 LANGUAGE plpgsql;
@@ -191,8 +199,15 @@ SELECT results_eq(
     ARRAY[TRUE],
     'records_approx_eq should return true when records have same text representation and are within the tolerance'
 );
+SELECT results_eq(
+    $$SELECT pg_temp.records_approx_eq((43, '0.1', 0.001, 'foo'), (43, 0.1, 0.002, 'bar'), '{"f3": 0.001, "f4": null}'::json)$$,
+    ARRAY[TRUE],
+    'records_approx_eq should return true when records have a column that differs but is ignored'
+);
+SELECT results_eq(
+    $$SELECT pg_temp.records_approx_eq((43, 0.1, 0.001), (43, 0.1, 0.003), '{"f3": 0.001}'::json)$$,
     ARRAY[FALSE],
-    'records_approx_equal should return false when records are not within the tolerance'
+    'records_approx_eq should return false when records are not within the tolerance'
 );
 SELECT results_eq(
     $$SELECT pg_temp.records_approx_eq((43, 0.1, 0.001, 5), (43, 0.1, 0.001), '{"f3": 0.001}'::json)$$,
