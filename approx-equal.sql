@@ -7,7 +7,7 @@ SELECT pgtap.plan(17);
 
 
 -- results_eq( cursor, cursor, description )
-CREATE OR REPLACE FUNCTION pg_temp.results_approx_equal( refcursor, refcursor, json, text )
+CREATE OR REPLACE FUNCTION pg_temp.results_approx_eq( refcursor, refcursor, json, text )
 RETURNS TEXT AS $$
 DECLARE
     have       ALIAS FOR $1;
@@ -23,7 +23,7 @@ BEGIN
     FETCH want INTO want_rec;
     want_found := FOUND;
     WHILE have_found OR want_found LOOP
-        IF have_found <> want_found OR NOT pg_temp.records_approx_equal(have_rec, want_rec, $3)
+        IF have_found <> want_found OR NOT pg_temp.records_approx_eq(have_rec, want_rec, $3)
         THEN
             RETURN ok( false, $4 ) || E'\n' || diag(
                 '    Results differ beginning at row ' || rownum || E':\n' ||
@@ -52,7 +52,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- results_eq( sql, sql, description )
-CREATE OR REPLACE FUNCTION pg_temp.results_approx_equal( TEXT, TEXT, json, TEXT )
+CREATE OR REPLACE FUNCTION pg_temp.results_approx_eq( TEXT, TEXT, json, TEXT )
 RETURNS TEXT AS $$
 DECLARE
     have REFCURSOR;
@@ -61,19 +61,19 @@ DECLARE
 BEGIN
     OPEN have FOR EXECUTE _query($1);
     OPEN want FOR EXECUTE _query($2);
-    res :=pg_temp.results_approx_equal(have, want, $3, $4);
+    res :=pg_temp.results_approx_eq(have, want, $3, $4);
     CLOSE have;
     CLOSE want;
     RETURN res;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION pg_temp.results_approx_equal( TEXT, TEXT, json )
+CREATE OR REPLACE FUNCTION pg_temp.results_approx_eq( TEXT, TEXT, json )
 RETURNS TEXT AS $$
-    SELECT pg_temp.results_approx_equal( $1, $2, $3, ''::TEXT );
+    SELECT pg_temp.results_approx_eq( $1, $2, $3, ''::TEXT );
 $$ LANGUAGE sql;
 
-CREATE FUNCTION pg_temp.values_approx_equal(numeric, numeric, numeric)
+CREATE FUNCTION pg_temp.values_approx_eq(numeric, numeric, numeric)
     RETURNS boolean
     AS $$
     SELECT
@@ -82,16 +82,16 @@ $$
 LANGUAGE SQL
 IMMUTABLE;
 
-CREATE FUNCTION pg_temp.values_approx_equal(TEXT, TEXT, TEXT)
+CREATE FUNCTION pg_temp.values_approx_eq(TEXT, TEXT, TEXT)
     RETURNS boolean
     AS $$
     SELECT
-        pg_temp.values_approx_equal($1::numeric, $2::numeric, $3::numeric);
+        pg_temp.values_approx_eq($1::numeric, $2::numeric, $3::numeric);
 $$
 LANGUAGE SQL
 IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION pg_temp.records_approx_equal (r1 record, r2 record, tolerances json)
+CREATE OR REPLACE FUNCTION pg_temp.records_approx_eq (r1 record, r2 record, tolerances json)
     RETURNS BOOLEAN
     AS $$
 DECLARE
@@ -141,125 +141,130 @@ $$
 LANGUAGE plpgsql;
 
 
+
 SELECT results_eq(
-    $$SELECT pg_temp.values_approx_equal(5, 5, 0)$$,
+    $$SELECT pg_temp.values_approx_eq(5, 5, 0)$$,
     ARRAY[TRUE],
-    'values_approx_equal should return true when values are exactly equal (zero tolerance)'
+    'values_approx_eq should return true when values are exactly equal (zero tolerance)'
 );
 
 SELECT results_eq(
-    $$SELECT pg_temp.values_approx_equal(5, 5, 1)$$,
+    $$SELECT pg_temp.values_approx_eq(5, 5, 1)$$,
     ARRAY[TRUE],
-    'values_approx_equal should return true when values are exactly equal (non-zero tolerance)'
+    'values_approx_eq should return true when values are exactly equal (non-zero tolerance)'
 );
 
 SELECT results_eq(
-    $$SELECT pg_temp.values_approx_equal(6, 5, 1)$$,
+    $$SELECT pg_temp.values_approx_eq(6, 5, 1)$$,
     ARRAY[TRUE],
-    'values_approx_equal should return true when values are within tolerance (lhs > rhs)'
+    'values_approx_eq should return true when values are within tolerance (lhs > rhs)'
 );
 SELECT results_eq(
-    $$SELECT pg_temp.values_approx_equal(6, 7, 1)$$,
+    $$SELECT pg_temp.values_approx_eq(6, 7, 1)$$,
     ARRAY[TRUE],
-    'values_approx_equal should return true when values are within tolerance (lhs < rhs)'
+    'values_approx_eq should return true when values are within tolerance (lhs < rhs)'
 );
 
 SELECT results_eq(
-    $$SELECT pg_temp.values_approx_equal(9, 7, 1)$$,
+    $$SELECT pg_temp.values_approx_eq(9, 7, 1)$$,
     ARRAY[FALSE],
-    'values_approx_equal should return false when values are outside of tolerance (lhs > rhs)'
+    'values_approx_eq should return false when values are outside of tolerance (lhs > rhs)'
 );
 SELECT results_eq(
-    $$SELECT pg_temp.values_approx_equal(9, 11, 1)$$,
+    $$SELECT pg_temp.values_approx_eq(9, 11, 1)$$,
     ARRAY[FALSE],
-    'values_approx_equal should return false when values are outside of tolerance (lhs < rhs)'
+    'values_approx_eq should return false when values are outside of tolerance (lhs < rhs)'
 );
 
 SELECT results_eq(
-    $$SELECT pg_temp.records_approx_equal((43, 0.1), (43, 0.1), '{}'::json)$$,
+    $$SELECT pg_temp.records_approx_eq((43, 0.1), (43, 0.1), '{}'::json)$$,
     ARRAY[TRUE],
-    'records_approx_equal should return true when records are exactly equal'
+    'records_approx_eq should return true when records are exactly equal'
 );
 SELECT results_eq(
-    $$SELECT pg_temp.records_approx_equal((43, 0.1, 0.001), (43, 0.1, 0.002), '{"f3": 0.001}'::json)$$,
+    $$SELECT pg_temp.records_approx_eq((43, 0.1, 0.001), (43, 0.1, 0.002), '{"f3": 0.001}'::json)$$,
     ARRAY[TRUE],
-    'records_approx_equal should return true when records are within the tolerance'
+    'records_approx_eq should return true when records are within the tolerance'
 );
 SELECT results_eq(
-    $$SELECT pg_temp.records_approx_equal((43, 0.1, 0.001), (43, 0.1, 0.003), '{"f3": 0.001}'::json)$$,
+    $$SELECT pg_temp.records_approx_eq((43, '0.1', 0.001), (43, 0.1, 0.002), '{"f3": 0.001}'::json)$$,
+    ARRAY[TRUE],
+    'records_approx_eq should return true when records have same text representation and are within the tolerance'
+);
     ARRAY[FALSE],
     'records_approx_equal should return false when records are not within the tolerance'
 );
 SELECT results_eq(
-    $$SELECT pg_temp.records_approx_equal((43, 0.1, 0.001, 5), (43, 0.1, 0.001), '{"f3": 0.001}'::json)$$,
+    $$SELECT pg_temp.records_approx_eq((43, 0.1, 0.001, 5), (43, 0.1, 0.001), '{"f3": 0.001}'::json)$$,
     ARRAY[FALSE],
-    'records_approx_equal should return false when records have different number columns'
+    'records_approx_eq should return false when records have different number columns'
 );
+
 SELECT results_eq(
-    $$SELECT pg_temp.records_approx_equal((43, 'x', 0.001), (43, 0.1, 0.001), '{"f3": 0.001}'::json)$$,
+    $$SELECT pg_temp.records_approx_eq((43, 'x', 0.001), (43, 0.1, 0.001), '{"f3": 0.001}'::json)$$,
     ARRAY[FALSE],
-    'records_approx_equal should return false when records have different column types'
+    'records_approx_eq should return false when records have different column types'
 );
 
 SELECT * FROM check_test(
-    pg_temp.results_approx_equal(
+    pg_temp.results_approx_eq(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         '{}'::json
     ),
     true,
-    'records_approx_equal, when results are equal'
+    'results_approx_eq, when results are equal'
 );
 
 SELECT * FROM check_test(
-    pg_temp.results_approx_equal(
+    pg_temp.results_approx_eq(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (1,1), (2, 3)) vals(a, b)$$,
         '{}'::json
     ),
     false,
-    'records_approx_equal, when results are not equal'
+    'results_approx_eq, when results are not equal'
 );
 
 
 SELECT * FROM check_test(
-    pg_temp.results_approx_equal(
+    pg_temp.results_approx_eq(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (2,1), (1, 2)) vals(a, b)$$,
         '{"a": 1}'::json
     ),
     true,
-    'records_approx_equal, when results are within tolerance'
+    'results_approx_eq, when results are within tolerance'
 );
 
 SELECT * FROM check_test(
-    pg_temp.results_approx_equal(
+    pg_temp.results_approx_eq(
         $$select * from (values (1,1), (2, 2)) vals(a, b)$$,
         $$select * from (values (3,1), (1, 2)) vals(a, b)$$,
         '{"a": 1}'::json
     ),
     false,
-    'records_approx_equal, when results are not within tolerance'
+    'results_approx_eq, when results are not within tolerance'
 );
 
 SELECT * FROM check_test(
-    pg_temp.results_approx_equal(
+    pg_temp.results_approx_eq(
         $$select * from (values (1,50), (1, 10)) vals(a, b)$$,
         $$select * from (values (2,55), (0, 5)) vals(a, b)$$,
         json_build_object('a', 1, 'b', 5)
     ),
     true,
-    'records_approx_equal, when results are within tolerance (two cols)'
+    'results_approx_eq, when results are within tolerance (two cols)'
 );
 
 SELECT * FROM check_test(
-    pg_temp.results_approx_equal(
+    pg_temp.results_approx_eq(
         $$select * from (values (1,50), (1, 10)) vals(a, b)$$,
         $$select * from (values (2,55), (0, 5)) vals(a, b)$$,
         json_build_object('a', 1, 'b', 4)
     ),
     false,
-    'records_approx_equal, when results are not within tolerance (two cols)'
+    'results_approx_eq, when results are not within tolerance (two cols)'
 );
 
 SELECT
